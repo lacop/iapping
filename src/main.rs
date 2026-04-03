@@ -10,12 +10,16 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tower_http::trace;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+const TEST_KEY_ID: &str = "test-key-id";
 
 #[derive(Clone)]
 struct ProxyState {
     key_pair: Arc<EcdsaKeyPair>,
     client: Arc<reqwest::Client>,
+    sub: String,
 }
 
 #[tokio::main]
@@ -31,24 +35,30 @@ async fn main() -> Result<()> {
     let key_pair = Arc::new(create_key_pair()?);
     let client = Arc::new(reqwest::Client::new());
 
-    let jwks_server = create_jwks_sever(key_pair.clone()).await?;
-    let proxy_server = create_proxy_server(key_pair.clone(), client.clone()).await?;
+    let jwks_server =
+        create_jwks_sever(SocketAddr::from(([127, 0, 0, 1], 8081)), key_pair.clone()).await?;
+    let proxy_server = create_proxy_server(
+        SocketAddr::from(([127, 0, 0, 1], 8080)),
+        key_pair.clone(),
+        client.clone(),
+        "user1@example.com".to_string(),
+    )
+    .await?;
 
-    // TODO: graceful shutdown
     // Combine all servers.
     tokio::try_join!(jwks_server, proxy_server)?;
     Ok(())
 }
 
 async fn create_jwks_sever(
+    addr: SocketAddr,
     key_pair: Arc<EcdsaKeyPair>,
 ) -> Result<Serve<TcpListener, Router, Router>> {
+    tracing::info!("Starting JWKS server. Use http://{}/jwks.json", addr);
     let app = axum::Router::new()
         .route("/jwks.json", axum::routing::get(jwks_handler))
         .with_state(key_pair)
         .layer(tower_http::trace::TraceLayer::new_for_http());
-
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8081));
     let listener = TcpListener::bind(addr).await?;
     Ok(axum::serve(listener, app))
 }
@@ -56,7 +66,7 @@ async fn create_jwks_sever(
 async fn jwks_handler(
     State(key_pair): State<Arc<EcdsaKeyPair>>,
 ) -> std::result::Result<impl IntoResponse, (axum::http::StatusCode, String)> {
-    let jwks = dump_jwks(&key_pair, "test-key-id").map_err(|err| {
+    let jwks = dump_jwks(&key_pair, TEST_KEY_ID).map_err(|err| {
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             err.to_string(),
@@ -67,16 +77,25 @@ async fn jwks_handler(
 }
 
 async fn create_proxy_server(
+    addr: SocketAddr,
     key_pair: Arc<EcdsaKeyPair>,
     client: Arc<reqwest::Client>,
+    sub: String,
 ) -> Result<Serve<TcpListener, Router, Router>> {
+    tracing::info!(
+        "Starting proxy server. Use http://{}/ for user {}",
+        addr,
+        sub
+    );
+
     let app = axum::Router::new()
         .fallback(proxy_request_handler)
-        .with_state(ProxyState { key_pair, client })
+        .with_state(ProxyState {
+            key_pair,
+            client,
+            sub,
+        })
         .layer(tower_http::trace::TraceLayer::new_for_http());
-
-    // TODO listener per user/port
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
     let listener = TcpListener::bind(addr).await?;
     Ok(axum::serve(listener, app))
 }
@@ -117,12 +136,8 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
         // TODO const for the keyid
         create_jwt(
             &state.key_pair,
-            "test-key-id",
-            &claims_for_request(
-                // TODO: from server state
-                "user123@example.com",
-                &query_string,
-            ),
+            TEST_KEY_ID,
+            &claims_for_request(&state.sub, &query_string),
         )?,
     );
 
