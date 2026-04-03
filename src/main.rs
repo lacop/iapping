@@ -1,24 +1,60 @@
+use std::{net::SocketAddr, sync::Arc};
+
 use anyhow::Result;
-use aws_lc_rs::rand;
-use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
-use axum::Router;
-use axum::http::uri::PathAndQuery;
-use axum::serve::Serve;
-use axum::{body::Body, extract::State, http::Request, response::IntoResponse, response::Response};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use std::net::SocketAddr;
-use std::sync::Arc;
+use aws_lc_rs::{
+    rand,
+    signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair},
+};
+use axum::{
+    Router,
+    body::Body,
+    extract::State,
+    http::{Request, uri::PathAndQuery},
+    response::{IntoResponse, Response},
+    serve::Serve,
+};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use clap::Parser;
 use tokio::net::TcpListener;
-use tower_http::trace;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const TEST_KEY_ID: &str = "test-key-id";
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// The URL of the backend to proxy to, eg. http://localhost:8000
+    #[arg(long)]
+    target_url: String,
+
+    /// Audience presented in the IAP JWT.
+    /// Must match the audience expected by the backend.
+    #[arg(long)]
+    audience: String,
+
+    /// Address to bind the JWKS server to.
+    #[arg(long, default_value = "127.0.0.1:8081")]
+    jwks_address: SocketAddr,
+
+    /// Mapping of address to subject (email) claim, separated by commas.
+    /// Can be repeated.
+    #[arg(long, value_parser = parse_add_subject, required = true, value_name = "ADDRESS,SUBJECT")]
+    subjects: Vec<(SocketAddr, String)>,
+}
+
+fn parse_add_subject(s: &str) -> Result<(SocketAddr, String), String> {
+    let (addr_str, sub) = s
+        .split_once(',')
+        .ok_or_else(|| format!("expected `addr,sub`, got `{s}`"))?;
+    let addr = addr_str.parse::<SocketAddr>().map_err(|e| e.to_string())?;
+    Ok((addr, sub.to_string()))
+}
+
 #[derive(Clone)]
 struct ProxyState {
-    key_pair: Arc<EcdsaKeyPair>,
+    args: Arc<Args>,
     client: Arc<reqwest::Client>,
+    key_pair: Arc<EcdsaKeyPair>,
     sub: String,
 }
 
@@ -32,25 +68,34 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let key_pair = Arc::new(create_key_pair()?);
+    let args = Arc::new(Args::parse());
+
     let client = Arc::new(reqwest::Client::new());
+    let key_pair = Arc::new(create_key_pair()?);
 
-    let jwks_server =
-        create_jwks_sever(SocketAddr::from(([127, 0, 0, 1], 8081)), key_pair.clone()).await?;
-    let proxy_server = create_proxy_server(
-        SocketAddr::from(([127, 0, 0, 1], 8080)),
-        key_pair.clone(),
-        client.clone(),
-        "user1@example.com".to_string(),
-    )
-    .await?;
+    let mut all_servers = Vec::new();
 
-    // Combine all servers.
-    tokio::try_join!(jwks_server, proxy_server)?;
+    let jwks_server = create_jwks_server(args.jwks_address, key_pair.clone()).await?;
+    all_servers.push(jwks_server.into_future());
+
+    for (addr, sub) in &args.subjects {
+        let proxy_server = create_proxy_server(
+            *addr,
+            args.clone(),
+            client.clone(),
+            key_pair.clone(),
+            sub.clone(),
+        )
+        .await?;
+        all_servers.push(proxy_server.into_future());
+    }
+
+    // Run all servers concurrently.
+    futures::future::try_join_all(all_servers).await?;
     Ok(())
 }
 
-async fn create_jwks_sever(
+async fn create_jwks_server(
     addr: SocketAddr,
     key_pair: Arc<EcdsaKeyPair>,
 ) -> Result<Serve<TcpListener, Router, Router>> {
@@ -78,8 +123,9 @@ async fn jwks_handler(
 
 async fn create_proxy_server(
     addr: SocketAddr,
-    key_pair: Arc<EcdsaKeyPair>,
+    args: Arc<Args>,
     client: Arc<reqwest::Client>,
+    key_pair: Arc<EcdsaKeyPair>,
     sub: String,
 ) -> Result<Serve<TcpListener, Router, Router>> {
     tracing::info!(
@@ -91,8 +137,9 @@ async fn create_proxy_server(
     let app = axum::Router::new()
         .fallback(proxy_request_handler)
         .with_state(ProxyState {
-            key_pair,
+            args,
             client,
+            key_pair,
             sub,
         })
         .layer(tower_http::trace::TraceLayer::new_for_http());
@@ -116,9 +163,9 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
         .map(PathAndQuery::query)
         .flatten()
         .map(str::to_string);
-    // TODO: from cli flag
     let url = format!(
-        "http://localhost:8000{}",
+        "{}{}",
+        state.args.target_url,
         path_and_query.map(PathAndQuery::as_str).unwrap_or("/")
     );
 
@@ -133,11 +180,10 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
     // Add the IAP JWT header.
     request = request.header(
         "x-goog-iap-jwt-assertion",
-        // TODO const for the keyid
         create_jwt(
             &state.key_pair,
             TEST_KEY_ID,
-            &claims_for_request(&state.sub, &query_string),
+            &claims_for_request(&state.sub, &query_string, &state.args),
         )?,
     );
 
@@ -160,12 +206,11 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
     Ok(response)
 }
 
-fn claims_for_request(user: &str, query: &Option<String>) -> serde_json::Value {
+fn claims_for_request(user: &str, query: &Option<String>, args: &Args) -> serde_json::Value {
     // TODO
     serde_json::json!({
         "sub": user,
-        // TODO: from cli
-        "aud": "https://example.com",
+        "aud": args.audience,
         "exp": 1785229363,
         "iat": 1775228363,
         "iss": "https://cloud.google.com/iap",
