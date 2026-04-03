@@ -1,7 +1,9 @@
 use anyhow::Result;
 use aws_lc_rs::rand;
 use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
+use axum::Router;
 use axum::http::uri::PathAndQuery;
+use axum::serve::Serve;
 use axum::{body::Body, extract::State, http::Request, response::IntoResponse, response::Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -27,28 +29,56 @@ async fn main() -> Result<()> {
         .init();
 
     let key_pair = Arc::new(create_key_pair()?);
-    // TODO jwks server
-    {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&dump_jwks(&key_pair, "test-key-id")?)?
-        );
-    }
-
     let client = Arc::new(reqwest::Client::new());
 
-    // TODO listener per user/port
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
-    let listener = TcpListener::bind(addr).await?;
+    let jwks_server = create_jwks_sever(key_pair.clone()).await?;
+    let proxy_server = create_proxy_server(key_pair.clone(), client.clone()).await?;
 
+    // TODO: graceful shutdown
+    // Combine all servers.
+    tokio::try_join!(jwks_server, proxy_server)?;
+    Ok(())
+}
+
+async fn create_jwks_sever(
+    key_pair: Arc<EcdsaKeyPair>,
+) -> Result<Serve<TcpListener, Router, Router>> {
+    let app = axum::Router::new()
+        .route("/jwks.json", axum::routing::get(jwks_handler))
+        .with_state(key_pair)
+        .layer(tower_http::trace::TraceLayer::new_for_http());
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8081));
+    let listener = TcpListener::bind(addr).await?;
+    Ok(axum::serve(listener, app))
+}
+
+async fn jwks_handler(
+    State(key_pair): State<Arc<EcdsaKeyPair>>,
+) -> std::result::Result<impl IntoResponse, (axum::http::StatusCode, String)> {
+    let jwks = dump_jwks(&key_pair, "test-key-id").map_err(|err| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            err.to_string(),
+        )
+    })?;
+
+    Ok(axum::Json(jwks))
+}
+
+async fn create_proxy_server(
+    key_pair: Arc<EcdsaKeyPair>,
+    client: Arc<reqwest::Client>,
+) -> Result<Serve<TcpListener, Router, Router>> {
     let app = axum::Router::new()
         .fallback(proxy_request_handler)
         .with_state(ProxyState { key_pair, client })
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
-    // TODO: combine all servers
-    // TODO: graceful shutdown
-    Ok(axum::serve(listener, app).await?)
+    // TODO listener per user/port
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
+    let listener = TcpListener::bind(addr).await?;
+    Ok(axum::serve(listener, app))
 }
 
 async fn proxy_request_handler(
@@ -119,7 +149,11 @@ fn claims_for_request(user: &str, query: &Option<String>) -> serde_json::Value {
     // TODO
     serde_json::json!({
         "sub": user,
+        // TODO: from cli
         "aud": "https://example.com",
+        "exp": 1785229363,
+        "iat": 1775228363,
+        "iss": "https://cloud.google.com/iap",
     })
 }
 
