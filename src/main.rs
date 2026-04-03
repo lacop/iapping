@@ -160,8 +160,7 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
     let method = req.method().clone();
     let path_and_query = req.uri().path_and_query();
     let query_string = path_and_query
-        .map(PathAndQuery::query)
-        .flatten()
+        .and_then(PathAndQuery::query)
         .map(str::to_string);
     let url = format!(
         "{}{}",
@@ -180,11 +179,7 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
     // Add the IAP JWT header.
     request = request.header(
         "x-goog-iap-jwt-assertion",
-        create_jwt(
-            &state.key_pair,
-            TEST_KEY_ID,
-            &claims_for_request(&state.sub, &query_string, &state.args),
-        )?,
+        jwt_for_request(&state.key_pair, &state.sub, &query_string, &state.args)?,
     );
 
     let response = request.send().await?;
@@ -206,15 +201,63 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
     Ok(response)
 }
 
-fn claims_for_request(user: &str, query: &Option<String>, args: &Args) -> serde_json::Value {
-    // TODO
-    serde_json::json!({
+fn jwt_for_request(
+    key_pair: &EcdsaKeyPair,
+    user: &str,
+    query: &Option<String>,
+    args: &Args,
+) -> Result<String> {
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    // Start with valid claims.
+    let mut claims = serde_json::json!({
         "sub": user,
         "aud": args.audience,
-        "exp": 1785229363,
-        "iat": 1775228363,
+        "iat": now_unix - 30,
+        "exp": now_unix - 30 + 600,
         "iss": "https://cloud.google.com/iap",
-    })
+        // Real payload also has a "google" claim with access_levels,
+        // we skip that here to keep things simple.
+        // https://docs.cloud.google.com/iap/docs/signed-headers-howto#verifying_the_jwt_payload
+    });
+
+    // Support the same testing mechanism as GCP IAP via query string
+    // that will send an invalid JWT.
+    // https://docs.cloud.google.com/iap/docs/query-parameters-and-headers-howto#testing_jwt_verification
+    if let Some(query) = query {
+        let qmap = urlparse::parse_qs(query);
+        if get_single_value(&qmap, "gcp-iap-mode") == Some("SECURE_TOKEN_TEST") {
+            match get_single_value(&qmap, "iap-secure-token-test-type") {
+                Some("NOT_SET") => {
+                    // TODO: Does this mean no test type -> send valid, or
+                    // are we supposed to omit the header? Double check.
+                }
+                Some("FUTURE_ISSUE") => {
+                    claims["iat"] = serde_json::json!(now_unix + 600);
+                }
+                Some("PAST_EXPIRATION") => {
+                    claims["exp"] = serde_json::json!(now_unix - 600);
+                }
+                Some("ISSUER") => {
+                    claims["iss"] = serde_json::json!("invalid-issuer");
+                }
+                Some("AUDIENCE") => {
+                    claims["aud"] = serde_json::json!("invalid-audience");
+                }
+                Some("SIGNATURE") => {
+                    // Generate a new key pair to sign with.
+                    let other_key_pair = create_key_pair()?;
+                    return create_jwt(&other_key_pair, TEST_KEY_ID, &claims);
+                }
+                _ => return Err(anyhow::anyhow!("invalid gcp-iap-mode value")),
+            }
+        }
+    }
+
+    create_jwt(key_pair, TEST_KEY_ID, &claims)
 }
 
 fn create_key_pair() -> Result<EcdsaKeyPair> {
@@ -263,4 +306,17 @@ fn create_jwt(key_pair: &EcdsaKeyPair, kid: &str, claims: &serde_json::Value) ->
     let signature_b64 = URL_SAFE_NO_PAD.encode(signature.as_ref());
 
     Ok(format!("{}.{}.{}", header_b64, payload_b64, signature_b64))
+}
+
+fn get_single_value<'a>(
+    map: &'a std::collections::HashMap<String, Vec<String>>,
+    key: &str,
+) -> Option<&'a str> {
+    map.get(key).and_then(|values| {
+        if values.len() == 1 {
+            Some(values[0].as_str())
+        } else {
+            None
+        }
+    })
 }
