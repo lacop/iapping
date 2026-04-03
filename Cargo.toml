@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.102"
 aws-lc-rs = "1.16.2"
 axum = "0.8.8"
 base64 = "0.22.1"
