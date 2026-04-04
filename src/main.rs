@@ -225,7 +225,12 @@ fn jwt_for_request(
 
     // Start with valid claims.
     let mut claims = serde_json::json!({
+        // Identity claims.
+        // In real IAP the subject will be some stable identifier,
+        // we use the same as email for simplicity.
         "sub": user,
+        "email": user,
+        // Other claims.
         "aud": args.audience,
         "iat": now_unix - 30,
         "exp": now_unix - 30 + 600,
