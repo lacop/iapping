@@ -1,0 +1,6 @@
+Some ideas for potential future improvements:
+
+- Proper `Host` header handling.
+- Build static binaries for multiple platforms as part of release.
+
+Note: I do not plan to work on these for now. Will only implement more stuff if I run into limitations during my own use of this tool. Contributions are welcome though.
