@@ -29,8 +29,8 @@ jobs:
       - name: Run tests
         run: |
           # Start and wait for health checks.
-          docker-compose -f demo/compose.yaml up --wait
+          docker compose -f demo/compose.yaml up --wait
 
           ./demo/test.sh
 
-          docker-compose -f demo/compose.yaml down
+          docker compose -f demo/compose.yaml down
