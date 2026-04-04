@@ -10,7 +10,11 @@ However during local development and testing you now need a way to generate thos
 
 ## Installation
 
-(TODO: Install instructions once images are published)
+Via cargo:
+
+```bash
+cargo install --locked iapping
+```
 
 ## How to use
 
@@ -40,7 +44,7 @@ Requests to `localhost:9001` will be forwarded to `localhost:8000` with a valid 
 
 ### Docker Compose
 
-It might be more convenient to wrap the proxy and your service together in a Docker Compose file. See the [demo](demo/compose.yaml) for an example.
+It might be more convenient to wrap the proxy and your service together in a Docker Compose file. See the [demo](demo/compose.yaml) for an example. Pre-build Docker image available at `ghcr.io/lacop/iapping`.
 
 ### Testing JWT validation logic
 
