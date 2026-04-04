@@ -74,6 +74,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      # Replace hardcoded version in Cargo.toml with the tag version.
       - name: Patch version in Cargo.toml
         run: |
           version="${GITHUB_REF#refs/tags/}"
@@ -85,6 +86,7 @@ jobs:
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
-      - run: cargo publish
+      # We modified version in Cargo.toml, so we need to allow dirty publish.
+      - run: cargo publish --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
