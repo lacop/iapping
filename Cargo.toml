@@ -10,6 +10,11 @@ keywords = ["iap", "proxy", "gcp", "authentication", "jwt"]
 categories = ["authentication", "development-tools"]
 edition = "2024"
 
+exclude = [
+    ".github/*",
+    "demo/*",
+]
+
 [dependencies]
 anyhow = "1.0.102"
 aws-lc-rs = "1.16.2"
