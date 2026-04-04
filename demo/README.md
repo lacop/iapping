@@ -10,17 +10,14 @@ The Docker compose file integrates the demo server and *iapping* for end-to-end 
 $ docker compose up --build
 
 # The demo server runs on port 8000
-
 $ curl 127.0.0.1:8000/health
 ok
 
 # Without header we get an error
-
 $ curl 127.0.0.1:8000/auth
 Unauthorized: Missing JWT header
 
 # The iapping proxy serves JWKS on port 9999
-
 $ curl 127.0.0.1:9999/jwks.json
 {"keys":[{"alg":"ES256","crv":"P-256","kid":"test-key-id", ... }]}
 

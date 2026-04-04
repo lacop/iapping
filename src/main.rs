@@ -232,8 +232,10 @@ fn jwt_for_request(
         if get_single_value(&qmap, "gcp-iap-mode") == Some("SECURE_TOKEN_TEST") {
             match get_single_value(&qmap, "iap-secure-token-test-type") {
                 Some("NOT_SET") => {
-                    // TODO: Does this mean no test type -> send valid, or
-                    // are we supposed to omit the header? Double check.
+                    // Docs are bit confusing, the mode sounds like the token would not be set
+                    // at all (which would be a good test case), but it says "A valid JWT" and
+                    // indeed based on testing it seems to send a valid token, so this is likely
+                    // "not set" in the sense of missing enum value.
                 }
                 Some("FUTURE_ISSUE") => {
                     claims["iat"] = serde_json::json!(now_unix + 600);
