@@ -22,3 +22,22 @@ services:
       - IAP_JWT_AUDIENCE=https://example.com
       - UVICORN_HOST=0.0.0.0
       - UVICORN_PORT=8000
+
+  # Health checks so tests can easily wait before starting.
+  # Separate services since we don't have
+  health-check-demo:
+    image: alpine/curl
+    entrypoint: ["tail", "-f", "/dev/null"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://demo:8000/health"]
+      interval: 1s
+      timeout: 1s
+      retries: 5
+  health-check-iapping:
+    image: alpine/curl
+    entrypoint: ["tail", "-f", "/dev/null"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://iapping:9001/health"]
+      interval: 1s
+      timeout: 1s
+      retries: 5
