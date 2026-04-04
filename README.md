@@ -64,6 +64,10 @@ The code in `demo/server.py` is only for showcasing functionality and integratio
 
 Licensed under MIT license.
 
+## Name
+
+`IAP + ProxyING = iapping`, pronounced like *yapping*
+
 [gcp-docs-jwt-auth]: https://docs.cloud.google.com/iap/docs/signed-headers-howto#securing_iap_headers
 
 [gcp-docs-jwt-verify]: https://docs.cloud.google.com/iap/docs/signed-headers-howto#verifying_the_jwt_header

@@ -24,7 +24,8 @@ services:
       - UVICORN_PORT=8000
 
   # Health checks so tests can easily wait before starting.
-  # Separate services since we don't have
+  # Separate services since we don't have curl in the docker
+  # images (and don't want to add it there).
   health-check-demo:
     image: alpine/curl
     entrypoint: ["tail", "-f", "/dev/null"]
