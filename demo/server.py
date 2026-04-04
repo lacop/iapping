@@ -52,7 +52,7 @@ class IapJwtBackend(AuthenticationBackend):
                 signing_key.key,
                 algorithms=["ES256"],
                 options={
-                    "require": ["aud", "exp", "iat"],
+                    "require": ["aud", "exp", "iat", "iss"],
                     "strict_aud": True,
                     "verify_aud": True,
                     "verify_exp": True,
@@ -66,10 +66,10 @@ class IapJwtBackend(AuthenticationBackend):
                 leeway=30,
             )
 
-            sub = decoded.get("sub")
-            if not sub:
-                raise AuthenticationError("JWT missing 'sub' claim")
-            return AuthCredentials(["authenticated"]), IapJwtUser(sub)
+            email = decoded.get("email")
+            if not email:
+                raise AuthenticationError("JWT missing 'email' claim")
+            return AuthCredentials(["authenticated"]), IapJwtUser(email)
 
         except jwt.exceptions.PyJWTError as e:
             raise AuthenticationError("Invalid JWT: " + str(e)) from e

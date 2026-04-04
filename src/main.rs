@@ -70,7 +70,11 @@ async fn main() -> Result<()> {
 
     let args = Arc::new(Args::parse());
 
-    let client = Arc::new(reqwest::Client::new());
+    let client = Arc::new(
+        reqwest::ClientBuilder::new()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?,
+    );
     let key_pair = Arc::new(create_key_pair()?);
 
     let mut all_servers = Vec::new();
@@ -168,17 +172,24 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
         path_and_query.map(PathAndQuery::as_str).unwrap_or("/")
     );
 
-    // Forward request body and headers.
+    // Forward request body, arbitrary limit of 10MiB.
     let (parts, body) = req.into_parts();
-    let body = axum::body::to_bytes(body, usize::MAX).await?;
+    let body = axum::body::to_bytes(body, 10 * 1024 * 1024).await?;
     let mut request = state.client.request(method, url).body(body);
+
+    // Forward original request headers.
+    const IAP_JWT_HEADER: &str = "x-goog-iap-jwt-assertion";
     for (name, value) in &parts.headers {
+        if name.as_str().eq_ignore_ascii_case(IAP_JWT_HEADER) {
+            // GCP IAM will strip this header if client sends it,
+            // match that behavior.
+            continue;
+        }
         request = request.header(name, value);
     }
-
     // Add the IAP JWT header.
     request = request.header(
-        "x-goog-iap-jwt-assertion",
+        IAP_JWT_HEADER,
         jwt_for_request(&state.key_pair, &state.sub, &query_string, &state.args)?,
     );
 
@@ -214,7 +225,12 @@ fn jwt_for_request(
 
     // Start with valid claims.
     let mut claims = serde_json::json!({
+        // Identity claims.
+        // In real IAP the subject will be some stable identifier,
+        // we use the same as email for simplicity.
         "sub": user,
+        "email": user,
+        // Other claims.
         "aud": args.audience,
         "iat": now_unix - 30,
         "exp": now_unix - 30 + 600,
@@ -239,6 +255,7 @@ fn jwt_for_request(
                 }
                 Some("FUTURE_ISSUE") => {
                     claims["iat"] = serde_json::json!(now_unix + 600);
+                    claims["exp"] = serde_json::json!(now_unix + 1200);
                 }
                 Some("PAST_EXPIRATION") => {
                     claims["exp"] = serde_json::json!(now_unix - 600);
