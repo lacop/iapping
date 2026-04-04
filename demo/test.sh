@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # "Integration test" for the iapping tool using the demo server.
 # Assumes the server and proxy were started via `docker compose up --build`
