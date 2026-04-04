@@ -255,6 +255,7 @@ fn jwt_for_request(
                 }
                 Some("FUTURE_ISSUE") => {
                     claims["iat"] = serde_json::json!(now_unix + 600);
+                    claims["exp"] = serde_json::json!(now_unix + 1200);
                 }
                 Some("PAST_EXPIRATION") => {
                     claims["exp"] = serde_json::json!(now_unix - 600);
