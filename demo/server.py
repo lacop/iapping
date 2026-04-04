@@ -52,7 +52,7 @@ class IapJwtBackend(AuthenticationBackend):
                 signing_key.key,
                 algorithms=["ES256"],
                 options={
-                    "require": ["aud", "exp", "iat"],
+                    "require": ["aud", "exp", "iat", "iss"],
                     "strict_aud": True,
                     "verify_aud": True,
                     "verify_exp": True,
