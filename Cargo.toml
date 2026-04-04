@@ -1,6 +1,13 @@
 [package]
 name = "iapping"
-version = "0.1.0"
+description = "IAP-Proxy for testing auth"
+authors = ["Laco Papay <lacop@lacop.net>"]
+version = "0.0.1"
+license = "MIT"
+repository = "https://github.com/lacop/iapping"
+readme = "README.md"
+keywords = ["iap", "proxy", "gcp", "authentication", "jwt"]
+categories = ["authentication", "development-tools"]
 edition = "2024"
 
 [dependencies]
