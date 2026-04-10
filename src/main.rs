@@ -75,6 +75,8 @@ async fn main() -> Result<()> {
     let client = Arc::new(
         reqwest::ClientBuilder::new()
             .timeout(std::time::Duration::from_secs(10))
+            // Don't follow redirect, transparently proxy them.
+            .redirect(reqwest::redirect::Policy::none())
             .build()?,
     );
     let key_pair = Arc::new(create_key_pair()?);
