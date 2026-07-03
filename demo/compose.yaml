@@ -11,8 +11,8 @@ services:
       --jwks-address 0.0.0.0:9999
       --audience https://example.com
       --subjects 0.0.0.0:9001,user1@example.com
-      --subjects 0.0.0.0:9002,user2@example.com
-      --subjects 0.0.0.0:9003,user3@example.com
+      --subjects 0.0.0.0:9002,user2@example.com,sample_access_level
+      --subjects 0.0.0.0:9003,user3@example.com,can_have_two,access_levels
   demo:
     build: .
     ports:
