@@ -29,7 +29,7 @@ iapping \
   --audience /projects/PROJECT_NUMBER/global/backendServices/SERVICE_ID \
   --subjects 127.0.0.1:9001,user1@example.com \
   --subjects 127.0.0.1:9002,user2@example.com \
-  --subjects 127.0.0.1:9003,user3@example.com
+  --subjects 127.0.0.1:9003,user3@example.com,optional_sample_access_level
 ```
 
 Then you can start your service like this:

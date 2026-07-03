@@ -18,8 +18,9 @@ import os
 
 
 class IapJwtUser(SimpleUser):
-    def __init__(self, email: str):
+    def __init__(self, email: str, access_levels: list[str]):
         super().__init__(email)
+        self.access_levels = access_levels
 
     @property
     def email(self) -> str:
@@ -69,7 +70,9 @@ class IapJwtBackend(AuthenticationBackend):
             email = decoded.get("email")
             if not email:
                 raise AuthenticationError("JWT missing 'email' claim")
-            return AuthCredentials(["authenticated"]), IapJwtUser(email)
+
+            access_levels = decoded.get("google", {}).get("access_levels", [])
+            return AuthCredentials(["authenticated"]), IapJwtUser(email, access_levels)
 
         except jwt.exceptions.PyJWTError as e:
             raise AuthenticationError("Invalid JWT: " + str(e)) from e
@@ -110,7 +113,7 @@ async def auth_check(request: Request) -> PlainTextResponse:
     assert request.user.is_authenticated
     assert isinstance(request.user, IapJwtUser)
 
-    return PlainTextResponse(f"ok: {request.user.email}")
+    return PlainTextResponse(f"ok: {request.user.email}, access_levels: {request.user.access_levels}")
 
 
 app = Starlette(

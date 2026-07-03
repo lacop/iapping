@@ -42,13 +42,13 @@ assert_curl "http://localhost:9002/something" 404 "Not Found"
 assert_curl "http://localhost:9003/something" 404 "Not Found"
 
 # Three different identities.
-assert_curl "http://localhost:9001/auth" 200 "ok: user1@example.com"
-assert_curl "http://localhost:9002/auth" 200 "ok: user2@example.com"
-assert_curl "http://localhost:9003/auth" 200 "ok: user3@example.com"
+assert_curl "http://localhost:9001/auth" 200 "ok: user1@example.com, access_levels: []"
+assert_curl "http://localhost:9002/auth" 200 "ok: user2@example.com, access_levels: ['sample_access_level']"
+assert_curl "http://localhost:9003/auth" 200 "ok: user3@example.com, access_levels: ['can_have_two', 'access_levels']"
 
 # Can use IAP test mode to test validation logic.
 assert_curl "http://localhost:9001/auth?gcp-iap-mode=SECURE_TOKEN_TEST&iap-secure-token-test-type=NOT_SET" \
-    200 "ok: user1@example.com"
+    200 "ok: user1@example.com, access_levels: []"
 assert_curl "http://localhost:9001/auth?gcp-iap-mode=SECURE_TOKEN_TEST&iap-secure-token-test-type=FUTURE_ISSUE" \
     401 "Unauthorized: Invalid JWT: The token is not yet valid (iat)"
 assert_curl "http://localhost:9001/auth?gcp-iap-mode=SECURE_TOKEN_TEST&iap-secure-token-test-type=PAST_EXPIRATION" \
