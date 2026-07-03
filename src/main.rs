@@ -20,7 +20,17 @@ use clap::Parser;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+// TODO: If we generated a random one on each startup the target backend
+// would not need to restart, it would see new key and refetch JWKS.
 const TEST_KEY_ID: &str = "test-key-id";
+
+#[derive(Debug, Clone)]
+struct UserClaims {
+    // Email.
+    sub: String,
+    // Access levels (if any).
+    access_levels: Vec<String>,
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -38,18 +48,30 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:8081")]
     jwks_address: SocketAddr,
 
-    /// Mapping of address to subject (email) claim, separated by commas.
+    /// Mapping of address:port to subject (email) claim and optionally
+    /// a list of access levels, separated by commas.
     /// Can be repeated.
-    #[arg(long, value_parser = parse_add_subject, required = true, value_name = "ADDRESS,SUBJECT")]
-    subjects: Vec<(SocketAddr, String)>,
+    #[arg(long, value_parser = parse_add_subject, required = true, value_name = "ADDRESS,SUBJECT[,ACCESS_LEVEL1,..]")]
+    subjects: Vec<(SocketAddr, UserClaims)>,
 }
 
-fn parse_add_subject(s: &str) -> Result<(SocketAddr, String), String> {
-    let (addr_str, sub) = s
-        .split_once(',')
-        .ok_or_else(|| format!("expected `addr,sub`, got `{s}`"))?;
+fn parse_add_subject(s: &str) -> Result<(SocketAddr, UserClaims), String> {
+    let mut parts = s.split(',');
+    let addr_str = parts
+        .next()
+        .ok_or_else(|| format!("expected `addr,sub[,access_levels]`, got `{s}`"))?;
+    let sub = parts
+        .next()
+        .ok_or_else(|| format!("expected `addr,sub[,access_levels]`, got `{s}`"))?;
+    let access_levels = parts.map(str::to_string).collect();
     let addr = addr_str.parse::<SocketAddr>().map_err(|e| e.to_string())?;
-    Ok((addr, sub.to_string()))
+    Ok((
+        addr,
+        UserClaims {
+            sub: sub.to_string(),
+            access_levels,
+        },
+    ))
 }
 
 #[derive(Clone)]
@@ -57,7 +79,7 @@ struct ProxyState {
     args: Arc<Args>,
     client: Arc<reqwest::Client>,
     key_pair: Arc<EcdsaKeyPair>,
-    sub: String,
+    user: UserClaims,
 }
 
 #[tokio::main]
@@ -86,13 +108,13 @@ async fn main() -> Result<()> {
     let jwks_server = create_jwks_server(args.jwks_address, key_pair.clone()).await?;
     all_servers.push(jwks_server.into_future());
 
-    for (addr, sub) in &args.subjects {
+    for (addr, user) in &args.subjects {
         let proxy_server = create_proxy_server(
             *addr,
             args.clone(),
             client.clone(),
             key_pair.clone(),
-            sub.clone(),
+            user.clone(),
         )
         .await?;
         all_servers.push(proxy_server.into_future());
@@ -134,12 +156,12 @@ async fn create_proxy_server(
     args: Arc<Args>,
     client: Arc<reqwest::Client>,
     key_pair: Arc<EcdsaKeyPair>,
-    sub: String,
+    user: UserClaims,
 ) -> Result<Serve<TcpListener, Router, Router>> {
     tracing::info!(
         "Starting proxy server. Use http://{}/ for user {}",
         addr,
-        sub
+        user.sub,
     );
 
     let app = axum::Router::new()
@@ -148,7 +170,7 @@ async fn create_proxy_server(
             args,
             client,
             key_pair,
-            sub,
+            user,
         })
         .layer(tower_http::trace::TraceLayer::new_for_http());
     let listener = TcpListener::bind(addr).await?;
@@ -194,7 +216,7 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
     // Add the IAP JWT header.
     request = request.header(
         IAP_JWT_HEADER,
-        jwt_for_request(&state.key_pair, &state.sub, &query_string, &state.args)?,
+        jwt_for_request(&state.key_pair, &state.user, &query_string, &state.args)?,
     );
 
     let response = request.send().await?;
@@ -218,7 +240,7 @@ async fn proxy_request(state: &ProxyState, req: Request<Body>) -> Result<Respons
 
 fn jwt_for_request(
     key_pair: &EcdsaKeyPair,
-    user: &str,
+    user: &UserClaims,
     query: &Option<String>,
     args: &Args,
 ) -> Result<String> {
@@ -232,17 +254,21 @@ fn jwt_for_request(
         // Identity claims.
         // In real IAP the subject will be some stable identifier,
         // we use the same as email for simplicity.
-        "sub": user,
-        "email": user,
+        "sub": user.sub,
+        "email": user.sub,
         // Other claims.
         "aud": args.audience,
         "iat": now_unix - 30,
         "exp": now_unix - 30 + 600,
         "iss": "https://cloud.google.com/iap",
-        // Real payload also has a "google" claim with access_levels,
-        // we skip that here to keep things simple.
-        // https://docs.cloud.google.com/iap/docs/signed-headers-howto#verifying_the_jwt_payload
     });
+
+    if !user.access_levels.is_empty() {
+        // https://docs.cloud.google.com/iap/docs/signed-headers-howto#verifying_the_jwt_payload
+        claims["google"] = serde_json::json!({
+            "access_levels": user.access_levels,
+        });
+    }
 
     // Support the same testing mechanism as GCP IAP via query string
     // that will send an invalid JWT.
